@@ -107,8 +107,7 @@ func (s *Scanner) Summary() []any {
 
 // TotalRecCount returns the total number of records within the dataset.
 func (s *Scanner) TotalRecCount() int {
-	// 6 is the number of metrics.
-	return len(s.ts) * len(s.la) * len(s.lo) * 6
+	return len(s.ts) * len(s.la) * len(s.lo)
 }
 
 // Scan reads all records for the next timescamp.
