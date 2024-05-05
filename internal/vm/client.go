@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,28 +17,44 @@ import (
 // Client is a Victoria Metrics client capable of inserting ERA5 metrics via
 // various protocols.
 type Client struct {
-	logger    *slog.Logger
-	httpCli   *http.Client
-	insertURL string
-	recToText recToTextFunc
+	logger       *slog.Logger
+	httpCli      *http.Client
+	insertURL    string
+	metricPrefix string
+	recToText    recToTextFunc
 }
 
+const metricPrefixRE = "^[a-zA-Z0-9]+$"
+
 // NewClient creates a new VM client.
-func NewClient(logger *slog.Logger, insertURL string, maxConns int) (*Client, error) {
+func NewClient(logger *slog.Logger, insertURL string, maxConns int, metricPrefix string) (*Client, error) {
 	url, err := url.Parse(insertURL)
 	if err != nil {
 		return nil, err
 	}
-	recToText := supportedAPIs[url.Path]
-	if recToText == nil {
-		return nil, fmt.Errorf("inserting into %q is not supported", insertURL)
+
+	matches, err := regexp.Match(metricPrefixRE, []byte(metricPrefix))
+	if err != nil {
+		return nil, err
+	}
+	if !matches {
+		return nil, fmt.Errorf("metric prefix %q does not match %q regular expression", metricPrefix, metricPrefixRE)
 	}
 
+	apiParams := apiParamsFuncs[url.Path]
+	if apiParams == nil {
+		return nil, fmt.Errorf("inserting into %q is not supported", insertURL)
+	}
 	q := url.Query()
-	for name, value := range apiParams[url.Path] {
+	for name, value := range apiParams(metricPrefix) {
 		q.Add(name, value)
 	}
 	url.RawQuery = q.Encode()
+
+	recToText := recToTextFuncs[url.Path]
+	if recToText == nil {
+		return nil, fmt.Errorf("inserting into %q is not supported", insertURL)
+	}
 
 	return &Client{
 		logger: logger,
@@ -53,14 +70,15 @@ func NewClient(logger *slog.Logger, insertURL string, maxConns int) (*Client, er
 				MaxConnsPerHost:     maxConns,
 			},
 		},
-		insertURL: url.String(),
-		recToText: recToText,
+		insertURL:    url.String(),
+		metricPrefix: metricPrefix,
+		recToText:    recToText,
 	}, nil
 }
 
 // Insert inserts ERA5 records into Victoria Metrics.
 func (c *Client) Insert(recs []era5.Record) {
-	res, err := c.httpCli.Post(c.insertURL, "text/plain", recsToText(recs, c.recToText))
+	res, err := c.httpCli.Post(c.insertURL, "text/plain", recsToText(recs, c.metricPrefix, c.recToText))
 	if err != nil {
 		c.logger.Error("Could not post data", "err", err)
 		return
@@ -74,19 +92,48 @@ func (c *Client) Insert(recs []era5.Record) {
 	res.Body.Close()
 }
 
-type recToTextFunc func(*strings.Builder, *era5.Record)
+type apiParamsFunc func(string) map[string]string
+
+var apiParamsFuncs = map[string]apiParamsFunc{
+	"/influx/write":        influxDBAPIParams,
+	"/influx/api/v2/write": influxDBAPIParams,
+	"/write":               influxDBAPIParams,
+	"/api/v2/write":        influxDBAPIParams,
+	"/api/v1/import/csv":   csvAPIParams,
+}
+
+func influxDBAPIParams(metricPrefix string) map[string]string {
+	return nil
+}
+
+func csvAPIParams(metricPrefix string) map[string]string {
+	return map[string]string{
+		"format": fmt.Sprintf(""+
+			"1:time:unix_ms,"+
+			"2:label:la,"+
+			"3:label:lo,"+
+			"4:metric:%[1]s_u10,"+
+			"5:metric:%[1]s_v10,"+
+			"6:metric:%[1]s_t2m,"+
+			"7:metric:%[1]s_sf,"+
+			"8:metric:%[1]s_tcc,"+
+			"9:metric:%[1]s_tp", metricPrefix),
+	}
+}
+
+type recToTextFunc func(*strings.Builder, *era5.Record, string)
 
 // recsToText converts multiple ERA5 records to text.
-func recsToText(recs []era5.Record, recToText recToTextFunc) io.Reader {
+func recsToText(recs []era5.Record, metricPrefix string, recToText recToTextFunc) io.Reader {
 	var sb strings.Builder
 	for _, r := range recs {
-		recToText(&sb, &r)
+		recToText(&sb, &r, metricPrefix)
 		sb.WriteString("\n")
 	}
 	return strings.NewReader(sb.String())
 }
 
-var supportedAPIs = map[string]recToTextFunc{
+var recToTextFuncs = map[string]recToTextFunc{
 	"/influx/write":        recToInfluxDB,
 	"/influx/api/v2/write": recToInfluxDB,
 	"/write":               recToInfluxDB,
@@ -94,27 +141,13 @@ var supportedAPIs = map[string]recToTextFunc{
 	"/api/v1/import/csv":   recToCSV,
 }
 
-var apiParams = map[string]map[string]string{
-	"/api/v1/import/csv": map[string]string{
-		"format": "" +
-			"1:time:unix_ms," +
-			"2:label:la," +
-			"3:label:lo," +
-			"4:metric:era5_u10," +
-			"5:metric:era5_v10," +
-			"6:metric:era5_t2m," +
-			"7:metric:era5_sf," +
-			"8:metric:era5_tcc," +
-			"9:metric:era5_tp",
-	},
-}
-
-var influxDBFmt = "era5,la=%.2f,lo=%.2f u10=%d,v10=%d,t2m=%d,sf=%d,tcc=%d,tp=%d %d"
+var influxDBFmt = "%s,la=%.2f,lo=%.2f u10=%d,v10=%d,t2m=%d,sf=%d,tcc=%d,tp=%d %d"
 
 // recToInfluxDB converts a ERA5 record into InfluxDB line protocol v2 and
 // appends it to the string builder.
-func recToInfluxDB(sb *strings.Builder, r *era5.Record) {
+func recToInfluxDB(sb *strings.Builder, r *era5.Record, metricPrefix string) {
 	sb.WriteString(fmt.Sprintf(influxDBFmt, []any{
+		metricPrefix,
 		r.Latitude,
 		r.Longitude,
 		r.ZonalWind10M,
@@ -131,7 +164,7 @@ var csvFmt = "%d,%.2f,%.2f,%d,%d,%d,%d,%d,%d"
 
 // recToCSV converts an ERA5 record into a CSV record and appends it to the
 // string builder.
-func recToCSV(sb *strings.Builder, r *era5.Record) {
+func recToCSV(sb *strings.Builder, r *era5.Record, _ string) {
 	sb.WriteString(fmt.Sprintf(csvFmt, []any{
 		r.Timestamp,
 		r.Latitude,

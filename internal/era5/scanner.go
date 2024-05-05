@@ -26,7 +26,7 @@ type Scanner struct {
 }
 
 // NewScanner creates a new ERA5 file scanner.
-func NewScanner(filePath string) (*Scanner, error) {
+func NewScanner(filePath string, limitHours int) (*Scanner, error) {
 	nc, err := netcdf.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -43,6 +43,9 @@ func NewScanner(filePath string) (*Scanner, error) {
 	hours, err := dimValues[int32](nc, "time")
 	if err != nil {
 		return nil, err
+	}
+	if limitHours > 0 && limitHours < len(hours) {
+		hours = hours[0:limitHours]
 	}
 	s.ts = make([]int64, len(hours))
 	for i, h := range hours {
@@ -179,4 +182,9 @@ func (s *Scanner) Records() []Record {
 	recs := s.recs
 	s.recs = nil
 	return recs
+}
+
+// Error returns the error after last scan.
+func (s *Scanner) Error() error {
+	return s.err
 }
