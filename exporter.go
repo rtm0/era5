@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,8 +21,25 @@ var (
 	recsPerInsert = flag.Int("recsPerInsert", 500, "number of records sent to VM in one batch")
 	vmInsertURL   = flag.String("vmInsertUrl", "http://localhost:8428/write", "Victoria Metrics insert API URL. Default: InfluxDB line protocol v2")
 	metricPrefix  = flag.String("metricPrefix", "era5", "a prefix that will be added to the metric names (cannot be empty)")
+	hours         = flag.String("hours", "", "comma-separated set of hours to import. Takes presedence over -limitHours")
 	limitHours    = flag.Int("limitHours", 0, "export only this many hours of data. Default: 0 (no limit)")
 )
+
+func parseHours(str string) ([]int, error) {
+	hrs := make([]int, 0)
+	if len(str) == 0 {
+		return hrs, nil
+	}
+	for _, sub := range strings.Split(str, ",") {
+		sub = strings.Trim(sub, " ")
+		h, err := strconv.Atoi(sub)
+		if err != nil {
+			return nil, err
+		}
+		hrs = append(hrs, h)
+	}
+	return hrs, nil
+}
 
 func main() {
 	flag.Parse()
@@ -32,7 +51,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	s, err := era5.NewScanner(*file, *limitHours)
+	hrs, err := parseHours(*hours)
+	if err != nil {
+		logger.Error("Could not parse -hours flag value", "err", err)
+		os.Exit(1)
+	}
+
+	s, err := era5.NewScanner(*file, hrs, *limitHours)
 	if err != nil {
 		logger.Error("Could not create an ERA5 scanner", "err", err)
 		os.Exit(1)
