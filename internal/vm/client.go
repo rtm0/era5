@@ -95,11 +95,12 @@ func (c *Client) Insert(recs []era5.Record) {
 type apiParamsFunc func(string) map[string]string
 
 var apiParamsFuncs = map[string]apiParamsFunc{
-	"/influx/write":        influxDBAPIParams,
-	"/influx/api/v2/write": influxDBAPIParams,
-	"/write":               influxDBAPIParams,
-	"/api/v2/write":        influxDBAPIParams,
-	"/api/v1/import/csv":   csvAPIParams,
+	"/influx/write":                          influxDBAPIParams,
+	"/influx/api/v2/write":                   influxDBAPIParams,
+	"/write":                                 influxDBAPIParams,
+	"/api/v2/write":                          influxDBAPIParams,
+	"/api/v1/import/csv":                     csvAPIParams,
+	"/insert/1/prometheus/api/v1/import/csv": csvAPIParams,
 }
 
 func influxDBAPIParams(metricPrefix string) map[string]string {
@@ -134,11 +135,12 @@ func recsToText(recs []era5.Record, metricPrefix string, recToText recToTextFunc
 }
 
 var recToTextFuncs = map[string]recToTextFunc{
-	"/influx/write":        recToInfluxDB,
-	"/influx/api/v2/write": recToInfluxDB,
-	"/write":               recToInfluxDB,
-	"/api/v2/write":        recToInfluxDB,
-	"/api/v1/import/csv":   recToCSV,
+	"/influx/write":                          recToInfluxDB,
+	"/influx/api/v2/write":                   recToInfluxDB,
+	"/write":                                 recToInfluxDB,
+	"/api/v2/write":                          recToInfluxDB,
+	"/api/v1/import/csv":                     recToCSV,
+	"/insert/1/prometheus/api/v1/import/csv": recToCSV,
 }
 
 var influxDBFmt = "%s,la=%.2f,lo=%.2f u10=%d,v10=%d,t2m=%d,sf=%d,tcc=%d,tp=%d %d"
